@@ -121,7 +121,7 @@ public final class NIOSSLPrivateKey {
     @usableFromInline
     internal let representation: Representation
 
-    internal func withUnsafeMutableEVPPKEYPointer<ReturnType>(_ body: (OpaquePointer) throws -> ReturnType) rethrows -> ReturnType {
+    public func withUnsafeMutableEVPPKEYPointer<ReturnType>(_ body: (OpaquePointer) throws -> ReturnType) rethrows -> ReturnType {
         guard case .native(let pointer) = self.representation else {
             preconditionFailure()
         }
@@ -299,7 +299,7 @@ public final class NIOSSLPrivateKey {
     ///
     /// In general, however, this function should be avoided in favour of one of the convenience
     /// initializers, which ensure that the lifetime of the EVP_PKEY object is better-managed.
-    static internal func fromUnsafePointer(takingOwnership pointer: OpaquePointer) -> NIOSSLPrivateKey {
+    static public func fromUnsafePointer(takingOwnership pointer: OpaquePointer) -> NIOSSLPrivateKey {
         return NIOSSLPrivateKey(withReference: pointer)
     }
 
@@ -351,6 +351,22 @@ extension NIOSSLPrivateKey {
         }
 
         return try body(bytes)
+    }
+    
+    public func toDERBytes() throws -> [UInt8] {
+        switch self.representation {
+        case .native(let ref):
+            // Sadly, BoringSSL doesn't provide us with a nice key hashing function. We therefore have only two options:
+            // we can either serialize the key into DER and feed that into the hasher, or we can attempt to hash the key parameters directly.
+            // We could attempt the latter, but frankly it causes a lot of pain for minimal gain, so we don't bother. This incurs an allocation,
+            // but that's ok. We crash if we hit an error here, as there is no way to recover.
+            return try NIOSSLPrivateKey.withUnsafeDERBuffer(of: ref) { buffer in
+                Array(buffer)
+            }
+        case .custom(_):
+            let errorStack = BoringSSLError.buildErrorStack()
+            throw BoringSSLError.unknownError(errorStack)
+        }
     }
 
     /// The custom signing algorithms required by this private key, if any.

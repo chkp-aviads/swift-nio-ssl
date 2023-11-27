@@ -49,7 +49,7 @@ public final class NIOSSLCertificate {
     }
 
     // Internal to this class we can just access the ref directly.
-    private var ref: OpaquePointer {
+    public var ref: OpaquePointer {
         return self._ref
     }
 
@@ -169,7 +169,7 @@ public final class NIOSSLCertificate {
     ///
     /// In general, however, this function should be avoided in favour of one of the convenience
     /// initializers, which ensure that the lifetime of the `X509` object is better-managed.
-    static func fromUnsafePointer(takingOwnership pointer: OpaquePointer) -> NIOSSLCertificate {
+    static public func fromUnsafePointer(takingOwnership pointer: OpaquePointer) -> NIOSSLCertificate {
         return NIOSSLCertificate(withOwnedReference: pointer)
     }
 
