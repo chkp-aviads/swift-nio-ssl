@@ -58,11 +58,20 @@ MANGLE_END */
     ],
     dependencies: generateDependencies(),
     targets: [
-        .target(name: "CNIOBoringSSL"),
+        .target(
+            name: "CNIOBoringSSL",
+            cSettings: [
+              .define("_GNU_SOURCE"),
+              .define("_POSIX_C_SOURCE", to: "200112L"),
+              .define("_DARWIN_C_SOURCE")
+            ]),
         .target(
             name: "CNIOBoringSSLShims",
             dependencies: [
                 "CNIOBoringSSL"
+            ],
+            cSettings: [
+              .define("_GNU_SOURCE"),
             ]),
         .target(
             name: "NIOSSL",
