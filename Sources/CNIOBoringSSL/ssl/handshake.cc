@@ -126,6 +126,8 @@ BSSL_NAMESPACE_BEGIN
 
 SSL_HANDSHAKE::SSL_HANDSHAKE(SSL *ssl_arg)
     : ssl(ssl_arg),
+      transcript(SSL_is_dtls(ssl_arg)),
+      inner_transcript(SSL_is_dtls(ssl_arg)),
       ech_is_inner(false),
       ech_authenticated_reject(false),
       scts_requested(false),
@@ -140,6 +142,7 @@ SSL_HANDSHAKE::SSL_HANDSHAKE(SSL *ssl_arg)
       early_data_offered(false),
       can_early_read(false),
       can_early_write(false),
+      is_early_version(false),
       next_proto_neg_seen(false),
       ticket_expected(false),
       extended_master_secret(false),
@@ -162,13 +165,6 @@ SSL_HANDSHAKE::SSL_HANDSHAKE(SSL *ssl_arg)
 
 SSL_HANDSHAKE::~SSL_HANDSHAKE() {
   ssl->ctx->x509_method->hs_flush_cached_ca_names(this);
-}
-
-void SSL_HANDSHAKE::ResizeSecrets(size_t hash_len) {
-  if (hash_len > SSL_MAX_MD_SIZE) {
-    abort();
-  }
-  hash_len_ = hash_len;
 }
 
 bool SSL_HANDSHAKE::GetClientHello(SSLMessage *out_msg,
@@ -593,6 +589,16 @@ const SSL_SESSION *ssl_handshake_session(const SSL_HANDSHAKE *hs) {
 int ssl_run_handshake(SSL_HANDSHAKE *hs, bool *out_early_return) {
   SSL *const ssl = hs->ssl;
   for (;;) {
+    // If a timeout during the handshake triggered a DTLS ACK or retransmit, we
+    // resolve that first. E.g., if |ssl_hs_private_key_operation| is slow, the
+    // ACK timer may fire.
+    if (hs->wait != ssl_hs_error && SSL_is_dtls(ssl)) {
+      int ret = ssl->method->flush(ssl);
+      if (ret <= 0) {
+        return ret;
+      }
+    }
+
     // Resolve the operation the handshake was waiting on. Each condition may
     // halt the handshake by returning, or continue executing if the handshake
     // may immediately proceed. Cases which halt the handshake can clear
@@ -604,7 +610,7 @@ int ssl_run_handshake(SSL_HANDSHAKE *hs, bool *out_early_return) {
         return -1;
 
       case ssl_hs_flush: {
-        int ret = ssl->method->flush_flight(ssl);
+        int ret = ssl->method->flush(ssl);
         if (ret <= 0) {
           return ret;
         }
@@ -614,7 +620,7 @@ int ssl_run_handshake(SSL_HANDSHAKE *hs, bool *out_early_return) {
       case ssl_hs_read_server_hello:
       case ssl_hs_read_message:
       case ssl_hs_read_change_cipher_spec: {
-        if (ssl->quic_method) {
+        if (SSL_is_quic(ssl)) {
           // QUIC has no ChangeCipherSpec messages.
           assert(hs->wait != ssl_hs_read_change_cipher_spec);
           // The caller should call |SSL_provide_quic_data|. Clear |hs->wait| so
@@ -682,7 +688,7 @@ int ssl_run_handshake(SSL_HANDSHAKE *hs, bool *out_early_return) {
         return -1;
 
       case ssl_hs_handback: {
-        int ret = ssl->method->flush_flight(ssl);
+        int ret = ssl->method->flush(ssl);
         if (ret <= 0) {
           return ret;
         }
@@ -754,9 +760,14 @@ int ssl_run_handshake(SSL_HANDSHAKE *hs, bool *out_early_return) {
       *out_early_return = false;
       return 1;
     }
+    // If the handshake returns |ssl_hs_flush|, implicitly finish the flight.
+    // This is a convenience so we do not need to manually insert this
+    // throughout the handshake.
+    if (hs->wait == ssl_hs_flush) {
+      ssl->method->finish_flight(ssl);
+    }
 
-    // Otherwise, loop to the beginning and resolve what was blocking the
-    // handshake.
+    // Loop to the beginning and resolve what was blocking the handshake.
   }
 }
 

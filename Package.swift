@@ -26,7 +26,7 @@ import class Foundation.ProcessInfo
 // Sources/CNIOBoringSSL directory. The source repository is at
 // https://boringssl.googlesource.com/boringssl.
 //
-// BoringSSL Commit: d0a175601b9e180ce58cb1e33649057f5c484146
+// BoringSSL Commit: 9559c4566a6d12194c42db5f3dbbcb5de35cfec2
 
 /// This function generates the dependencies we want to express.
 ///
@@ -144,3 +144,14 @@ let package = Package(
     ],
     cxxLanguageStandard: .cxx14
 )
+
+// ---    STANDARD CROSS-REPO SETTINGS DO NOT EDIT   --- //
+for target in package.targets {
+    if target.type != .plugin {
+        var settings = target.swiftSettings ?? []
+        // https://github.com/swiftlang/swift-evolution/blob/main/proposals/0444-member-import-visibility.md
+        settings.append(.enableUpcomingFeature("MemberImportVisibility"))
+        target.swiftSettings = settings
+    }
+}
+// --- END: STANDARD CROSS-REPO SETTINGS DO NOT EDIT --- //
