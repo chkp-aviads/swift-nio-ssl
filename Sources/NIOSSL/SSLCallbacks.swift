@@ -93,6 +93,8 @@ public typealias NIOSSLVerificationCallback = (NIOSSLVerificationResult, NIOSSLC
 public typealias NIOSSLCustomVerificationCallback = ([NIOSSLCertificate], EventLoopPromise<NIOSSLVerificationResult>) ->
     Void
 
+public typealias NIOSSLCustomErrorHandlingCallback = (NIOSSLHandler, ChannelHandlerContext, BoringSSLError) -> EventLoopFuture<Void>
+
 /// A custom verification callback that allows additional peer certificate verification logic after the logic of BoringSSL has completed successfully.
 ///
 /// It is invoked with two arguments:

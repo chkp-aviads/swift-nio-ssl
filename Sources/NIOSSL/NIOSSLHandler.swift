@@ -171,6 +171,7 @@ public class NIOSSLHandler: ChannelInboundHandler, ChannelOutboundHandler, Remov
 
     public func channelRead(context: ChannelHandlerContext, data: NIOAny) {
         let binaryData = unwrapInboundIn(data)
+        if binaryData.readableBytes == 0 { return }
 
         // The logic: feed the buffers, then take an action based on state.
         connection.consumeDataFromNetwork(binaryData)
@@ -194,6 +195,9 @@ public class NIOSSLHandler: ChannelInboundHandler, ChannelOutboundHandler, Remov
     }
 
     public func channelReadComplete(context: ChannelHandlerContext) {
+        if case .closed = self.state {
+            return
+        }
         guard let receiveBuffer = self.plaintextReadBuffer else {
             preconditionFailure("channelReadComplete called before handlerAdded")
         }
@@ -397,21 +401,34 @@ public class NIOSSLHandler: ChannelInboundHandler, ChannelOutboundHandler, Remov
             state = .active
             completeHandshake(context: context)
         case .failed(let err):
-            writeDataToNetwork(context: context, promise: nil)
-
-            // If there's a failed private key operation, we fire both errors.
-            if case .failure(let privateKeyError) = self.connection.customPrivateKeyResult {
-                context.fireErrorCaught(privateKeyError)
+            // Handle the error unless the callback handles it itself
+            if case .handshaking = state, let errorHandlingCallback = self.connection.customErrorHandlingCallback {
+                self.state = .closed
+                errorHandlingCallback(self, context, err)
+                    .whenFailure { _ in
+                        self.defaultErrorHandling(context: context, err: err)
+                    }
+            } else {
+                defaultErrorHandling(context: context, err: err)
             }
-
-            // If there's a failed custom context operation, we fire both errors.
-            if let customContextError = self.connection.parentContext.customContextManager?.loadContextError {
-                context.fireErrorCaught(customContextError)
-            }
-
-            context.fireErrorCaught(NIOSSLError.handshakeFailed(err))
-            channelClose(context: context, reason: NIOSSLError.handshakeFailed(err))
         }
+    }
+    
+    private func defaultErrorHandling(context: ChannelHandlerContext, err: BoringSSLError) {
+        writeDataToNetwork(context: context, promise: nil)
+
+        // If there's a failed private key operation, we fire both errors.
+        if case .failure(let privateKeyError) = self.connection.customPrivateKeyResult {
+            context.fireErrorCaught(privateKeyError)
+        }
+
+        // If there's a failed custom context operation, we fire both errors.
+        if let customContextError = self.connection.parentContext.customContextManager?.loadContextError {
+            context.fireErrorCaught(customContextError)
+        }
+
+        context.fireErrorCaught(NIOSSLError.handshakeFailed(err))
+        channelClose(context: context, reason: NIOSSLError.handshakeFailed(err))
     }
 
     private func completeHandshake(context: ChannelHandlerContext) {

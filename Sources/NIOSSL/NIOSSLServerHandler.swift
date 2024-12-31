@@ -26,7 +26,8 @@ public final class NIOSSLServerHandler: NIOSSLHandler {
         self.init(
             context: context,
             optionalCustomVerificationCallback: nil,
-            optionalAdditionalPeerCertificateVerificationCallback: nil
+            optionalAdditionalPeerCertificateVerificationCallback: nil,
+            optionalCustomErrorHandlingCallback: nil
         )
     }
 
@@ -61,12 +62,14 @@ public final class NIOSSLServerHandler: NIOSSLHandler {
     ///         ``TLSConfiguration`` that was used to construct the ``NIOSSLContext`` has ``TLSConfiguration/certificateVerification`` set to ``CertificateVerification/none``.
     public convenience init(
         context: NIOSSLContext,
-        customVerificationCallback: @escaping NIOSSLCustomVerificationCallback
+        customVerificationCallback: @escaping NIOSSLCustomVerificationCallback,
+        customErrorHandlingCallback: @escaping NIOSSLCustomErrorHandlingCallback
     ) {
         self.init(
             context: context,
             optionalCustomVerificationCallback: customVerificationCallback,
-            optionalAdditionalPeerCertificateVerificationCallback: nil
+            optionalAdditionalPeerCertificateVerificationCallback: nil,
+            optionalCustomErrorHandlingCallback : customErrorHandlingCallback
         )
     }
 
@@ -82,12 +85,14 @@ public final class NIOSSLServerHandler: NIOSSLHandler {
     public convenience init(
         context: NIOSSLContext,
         customVerificationCallback: NIOSSLCustomVerificationCallback? = nil,
+        customErrorHandlingCallback: NIOSSLCustomErrorHandlingCallback? = nil,
         configuration: Configuration
     ) {
         self.init(
             context: context,
             optionalCustomVerificationCallback: customVerificationCallback,
             optionalAdditionalPeerCertificateVerificationCallback: nil,
+            optionalCustomErrorHandlingCallback: customErrorHandlingCallback,
             configuration: configuration
         )
     }
@@ -100,7 +105,8 @@ public final class NIOSSLServerHandler: NIOSSLHandler {
         .init(
             context: context,
             optionalCustomVerificationCallback: nil,
-            optionalAdditionalPeerCertificateVerificationCallback: additionalPeerCertificateVerificationCallback
+            optionalAdditionalPeerCertificateVerificationCallback: additionalPeerCertificateVerificationCallback,
+            optionalCustomErrorHandlingCallback: nil
         )
     }
 
@@ -109,6 +115,7 @@ public final class NIOSSLServerHandler: NIOSSLHandler {
         context: NIOSSLContext,
         optionalCustomVerificationCallback: NIOSSLCustomVerificationCallback?,
         optionalAdditionalPeerCertificateVerificationCallback: _NIOAdditionalPeerCertificateVerificationCallback?,
+        optionalCustomErrorHandlingCallback: NIOSSLCustomErrorHandlingCallback?,
         configuration: Configuration = .init()
     ) {
         guard let connection = context.createConnection() else {
@@ -119,6 +126,10 @@ public final class NIOSSLServerHandler: NIOSSLHandler {
 
         if let customVerificationCallback = optionalCustomVerificationCallback {
             connection.setCustomVerificationCallback(.init(callback: customVerificationCallback))
+        }
+        
+        if let customErrorHandlingCallback = optionalCustomErrorHandlingCallback {
+            connection.setCustomErrorHandlingCallback(customErrorHandlingCallback)
         }
 
         super.init(

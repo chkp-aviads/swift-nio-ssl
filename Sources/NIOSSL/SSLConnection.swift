@@ -53,6 +53,7 @@ internal final class SSLConnection {
     private var verificationCallback: NIOSSLVerificationCallback?
     internal var customVerificationManager: CustomVerifyManager?
     internal var customPrivateKeyResult: Result<ByteBuffer, Error>?
+    internal var customErrorHandlingCallback: NIOSSLCustomErrorHandlingCallback?
 
     /// Whether certificate hostnames should be validated.
     var validateHostnames: Bool {
@@ -184,6 +185,10 @@ internal final class SSLConnection {
             // We force unwrap the custom verification manager because for it to not be set is a programmer error.
             return connection.customVerificationManager!.process(on: connection)
         }
+    }
+    
+    func setCustomErrorHandlingCallback(_ customErrorHandlingCallback: @escaping NIOSSLCustomErrorHandlingCallback) {
+        self.customErrorHandlingCallback = customErrorHandlingCallback
     }
 
     /// Sets whether renegotiation is supported.
