@@ -36,7 +36,7 @@ import class Foundation.ProcessInfo
 func generateDependencies() -> [Package.Dependency] {
     if ProcessInfo.processInfo.environment["SWIFTCI_USE_LOCAL_DEPS"] == nil {
         return [
-            .package(url: "https://github.com/chkp-aviads/swift-nio.git", branch: "main"),
+            .package(url: "https://github.com/chkp-aviads/swift-nio.git", from: "2.82.0"),
         ]
     } else {
         return [
