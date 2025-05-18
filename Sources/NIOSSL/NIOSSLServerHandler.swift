@@ -63,7 +63,7 @@ public final class NIOSSLServerHandler: NIOSSLHandler {
     public convenience init(
         context: NIOSSLContext,
         customVerificationCallback: @escaping NIOSSLCustomVerificationCallback,
-        customErrorHandlingCallback: @escaping NIOSSLCustomErrorHandlingCallback
+        customErrorHandlingCallback: NIOSSLCustomErrorHandlingCallback?
     ) {
         self.init(
             context: context,

@@ -414,8 +414,7 @@ internal func serverTLSChannel(
 
                     let handler: NIOSSLHandler
                     if let verify = customVerificationCallback {
-                        handler = NIOSSLServerHandler(context: context, customVerificationCallback: verify) { _,_,_ in return channel.eventLoop.makeSucceededVoidFuture()
-                        }
+                        handler = NIOSSLServerHandler(context: context, customVerificationCallback: verify, customErrorHandlingCallback: nil)
                     } else {
                         handler = NIOSSLServerHandler(context: context)
                     }

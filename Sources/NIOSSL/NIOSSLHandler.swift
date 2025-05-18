@@ -411,6 +411,7 @@ public class NIOSSLHandler: ChannelInboundHandler, ChannelOutboundHandler, Remov
             if case .handshaking = state, let errorHandlingCallback = self.connection.customErrorHandlingCallback {
                 self.state = .closed
                 errorHandlingCallback(self, context, err)
+                    .assumeIsolated()
                     .whenFailure { _ in
                         self.defaultErrorHandling(context: context, err: err)
                     }
