@@ -827,6 +827,13 @@ extension NIOSSLHandler {
     public var tlsVersion: TLSVersion? {
         self.connection.getTLSVersionForConnection()
     }
+
+    /// Return a NIOSSLCertificate from the verified peer after handshake has completed.
+    ///
+    /// Similar to getTlsVersionForConnection this **is not thread safe**.
+    public var peerCertificate: NIOSSLCertificate? {
+        self.connection.getPeerCertificate()
+    }
 }
 
 extension Channel {
@@ -836,6 +843,14 @@ extension Channel {
             $0.tlsVersion
         }
     }
+
+    /// API to retrieve the verified NIOSSLCertificate of the peer off the 'Channel'
+    public func nioSSL_peerCertificate() -> EventLoopFuture<NIOSSLCertificate?> {
+        self.pipeline.handler(type: NIOSSLHandler.self).map {
+            $0.peerCertificate
+        }
+    }
+
 }
 
 extension ChannelPipeline.SynchronousOperations {
@@ -843,6 +858,12 @@ extension ChannelPipeline.SynchronousOperations {
     public func nioSSL_tlsVersion() throws -> TLSVersion? {
         let handler = try self.handler(type: NIOSSLHandler.self)
         return handler.tlsVersion
+    }
+
+    /// API to retrieve the verified NIOSSLCertificate of the peer directly from the 'ChannelPipeline'
+    public func nioSSL_peerCertificate() throws -> NIOSSLCertificate? {
+        let handler = try self.handler(type: NIOSSLHandler.self)
+        return handler.peerCertificate
     }
 }
 

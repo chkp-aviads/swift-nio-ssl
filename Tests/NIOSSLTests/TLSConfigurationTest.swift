@@ -12,6 +12,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+@preconcurrency import Dispatch
 import NIOConcurrencyHelpers
 import NIOCore
 import NIOEmbedded
@@ -25,12 +26,6 @@ import XCTest
 internal import CNIOBoringSSL
 #else
 @_implementationOnly import CNIOBoringSSL
-#endif
-
-#if compiler(>=5.8)
-@preconcurrency import Dispatch
-#else
-import Dispatch
 #endif
 
 final class ErrorCatcher<T: Error>: ChannelInboundHandler, Sendable {
@@ -1080,6 +1075,51 @@ class TLSConfigurationTest: XCTestCase {
             andServerConfig: serverConfig,
             errorTextContains: "ALERT_HANDSHAKE_FAILURE"
         )
+    }
+
+    func testPQCompatibleCurves() throws {
+        var clientConfig = TLSConfiguration.makeClientConfiguration()
+        clientConfig.curves = [.x25519_MLKEM768]
+        clientConfig.certificateVerification = .noHostnameVerification
+        clientConfig.trustRoots = .certificates([TLSConfigurationTest.cert1])
+
+        var serverConfig = TLSConfiguration.makeServerConfiguration(
+            certificateChain: [.certificate(TLSConfigurationTest.cert1)],
+            privateKey: .privateKey(TLSConfigurationTest.key1)
+        )
+        serverConfig.curves = [.x25519_MLKEM768]
+        serverConfig.certificateVerification = .none
+        try assertHandshakeSucceeded(withClientConfig: clientConfig, andServerConfig: serverConfig)
+    }
+
+    func testDefaultCurvesExcludePQ() throws {
+        var clientConfig = TLSConfiguration.makeClientConfiguration()
+        clientConfig.curves = [.x25519_MLKEM768]
+        clientConfig.certificateVerification = .noHostnameVerification
+        clientConfig.trustRoots = .certificates([TLSConfigurationTest.cert1])
+
+        var serverConfig = TLSConfiguration.makeServerConfiguration(
+            certificateChain: [.certificate(TLSConfigurationTest.cert1)],
+            privateKey: .privateKey(TLSConfigurationTest.key1)
+        )
+        serverConfig.certificateVerification = .none
+        try assertHandshakeError(
+            withClientConfig: clientConfig,
+            andServerConfig: serverConfig,
+            errorTextContains: "ALERT_HANDSHAKE_FAILURE"
+        )
+    }
+
+    func testUnknownCurveValuesFail() throws {
+        var clientConfig = TLSConfiguration.makeClientConfiguration()
+        clientConfig.curves = [.init(rawValue: 0x9898)]
+
+        XCTAssertThrowsError(try NIOSSLContext(configuration: clientConfig)) { error in
+            XCTAssertTrue(
+                String(describing: error).contains("UNSUPPORTED_ELLIPTIC_CURVE"),
+                "Error \(error) does not contain UNSUPPORTED_ELLIPTIC_CURVE"
+            )
+        }
     }
 
     func testCompatibleCipherSuite() throws {
