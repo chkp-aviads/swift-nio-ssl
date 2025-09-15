@@ -226,7 +226,7 @@ public final class NIOSSLPrivateKey {
     }
 
     /// Create a ``NIOSSLPrivateKey`` from a file at a given path in either PEM or
-    /// DER format, providing a passphrase callback.
+    /// DER format.
     ///
     /// - parameters:
     ///     - file: The path to the file to load.
@@ -418,6 +418,19 @@ extension NIOSSLPrivateKey {
             return customKey.signatureAlgorithms
         }
     }
+
+    /// Extracts the bytes of this private key in DER format.
+    /// - Returns: The DER-encoded bytes for this private key.
+    public var derBytes: [UInt8] {
+        get throws {
+            switch self.representation {
+            case .native(let evpKey):
+                return try Self.withUnsafeDERBuffer(of: evpKey) { Array($0) }
+            case .custom(let custom):
+                return custom.derBytes
+            }
+        }
+    }
 }
 
 extension NIOSSLPrivateKey: Equatable {
@@ -458,3 +471,6 @@ extension NIOSSLPrivateKey: Hashable {
         }
     }
 }
+
+@available(*, unavailable)
+extension NIOSSLPrivateKey.Representation: Sendable {}

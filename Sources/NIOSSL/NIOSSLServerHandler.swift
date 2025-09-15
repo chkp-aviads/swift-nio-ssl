@@ -25,9 +25,9 @@ public final class NIOSSLServerHandler: NIOSSLHandler {
     public convenience init(context: NIOSSLContext) {
         self.init(
             context: context,
-            optionalCustomVerificationCallback: nil,
+            optionalCustomVerificationCallbackManager: nil,
             optionalAdditionalPeerCertificateVerificationCallback: nil,
-            optionalCustomErrorHandlingCallback: nil
+	    optionalCustomErrorHandlingCallback: nil
         )
     }
 
@@ -60,6 +60,10 @@ public final class NIOSSLServerHandler: NIOSSLHandler {
     ///
     ///         If set, this callback is provided the certificates presented by the peer. NIOSSL will not have pre-processed them. The callback will not be used if the
     ///         ``TLSConfiguration`` that was used to construct the ``NIOSSLContext`` has ``TLSConfiguration/certificateVerification`` set to ``CertificateVerification/none``.
+    ///
+    /// - Note: Use ``init(context:customVerificationCallbackWithMetadata:)`` to provide a custom verification
+    ///   callback where the peer's *validated* certificate chain can be returned. This data can then be accessed from
+    ///   the handler.
     public convenience init(
         context: NIOSSLContext,
         customVerificationCallback: @escaping NIOSSLCustomVerificationCallback,
@@ -67,9 +71,38 @@ public final class NIOSSLServerHandler: NIOSSLHandler {
     ) {
         self.init(
             context: context,
-            optionalCustomVerificationCallback: customVerificationCallback,
+            optionalCustomVerificationCallbackManager: CustomVerifyManager(callback: customVerificationCallback),
             optionalAdditionalPeerCertificateVerificationCallback: nil,
-            optionalCustomErrorHandlingCallback : customErrorHandlingCallback
+	    optionalCustomErrorHandlingCallback : customErrorHandlingCallback
+        )
+    }
+
+    /// Construct a new ``NIOSSLServerHandler`` with the given `context` and a specific `serverHostname`.
+    ///
+    /// - parameters:
+    ///     - context: The ``NIOSSLContext`` to use on this connection.
+    ///     - customVerificationCallbackWithMetadata: A callback to use that will override NIOSSL's normal verification
+    ///         logic. If validation is successful, the peer's validated certificate chain can be returned, and later
+    ///         accessed via ``NIOSSLHandler/peerValidatedCertificateChain``. The callback will not be used if the
+    ///         ``TLSConfiguration`` that was used to construct the ``NIOSSLContext`` has
+    ///         ``TLSConfiguration/certificateVerification`` set to ``CertificateVerification/none``.
+    ///
+    ///       - This callback is provided the certificates presented by the peer. NIOSSL will not have pre-processed
+    ///       them. Therefore, a validated chain must be derived *within* this callback (potentially involving fetching
+    ///       additional intermediate certificates). The *validated* certificate chain returned in the promise result
+    ///       **must** be a verified path to a trusted root. Importantly, the certificates presented by the peer should
+    ///       not be assumed to be valid.
+    public convenience init(
+        context: NIOSSLContext,
+        customVerificationCallbackWithMetadata: @escaping NIOSSLCustomVerificationCallbackWithMetadata
+    ) {
+        self.init(
+            context: context,
+            optionalCustomVerificationCallbackManager: CustomVerifyManager(
+                callback: customVerificationCallbackWithMetadata
+            ),
+            optionalAdditionalPeerCertificateVerificationCallback: nil,
+            optionalCustomErrorHandlingCallback: nil
         )
     }
 
@@ -82,6 +115,10 @@ public final class NIOSSLServerHandler: NIOSSLHandler {
     ///         If set, this callback is provided the certificates presented by the peer. NIOSSL will not have pre-processed them. The callback will not be used if the
     ///         ``TLSConfiguration`` that was used to construct the ``NIOSSLContext`` has ``TLSConfiguration/certificateVerification`` set to ``CertificateVerification/none``.
     ///     - configuration: Configuration for this handler.
+    ///
+    /// - Note: Use ``init(context:configuration:customVerificationCallbackWithMetadata:)`` to provide a custom
+    ///   verification callback where the peer's *validated* certificate chain can be returned. This data can then be
+    ///   accessed from the handler.
     public convenience init(
         context: NIOSSLContext,
         customVerificationCallback: NIOSSLCustomVerificationCallback? = nil,
@@ -90,7 +127,40 @@ public final class NIOSSLServerHandler: NIOSSLHandler {
     ) {
         self.init(
             context: context,
-            optionalCustomVerificationCallback: customVerificationCallback,
+            optionalCustomVerificationCallbackManager: customVerificationCallback.map(CustomVerifyManager.init),
+            optionalAdditionalPeerCertificateVerificationCallback: nil,
+            optionalCustomErrorHandlingCallback: nil,
+            configuration: configuration
+        )
+    }
+
+    /// Construct a new ``NIOSSLServerHandler`` with the given `context` and a specific `serverHostname`.
+    ///
+    /// - parameters:
+    ///     - context: The ``NIOSSLContext`` to use on this connection.
+    ///     - configuration: Configuration for this handler.
+    ///     - customVerificationCallbackWithMetadata: A callback to use that will override NIOSSL's normal verification
+    ///         logic. If validation is successful, the peer's validated certificate chain can be returned, and later
+    ///         accessed via ``NIOSSLHandler/peerValidatedCertificateChain``. The callback will not be used if the
+    ///         ``TLSConfiguration`` that was used to construct the ``NIOSSLContext`` has
+    ///         ``TLSConfiguration/certificateVerification`` set to ``CertificateVerification/none``.
+    ///
+    ///       - This callback is provided the certificates presented by the peer. NIOSSL will not have pre-processed
+    ///       them. Therefore, a validated chain must be derived *within* this callback (potentially involving fetching
+    ///       additional intermediate certificates). The *validated* certificate chain returned in the promise result
+    ///       **must** be a verified path to a trusted root. Importantly, the certificates presented by the peer should
+    ///       not be assumed to be valid.
+    public convenience init(
+        context: NIOSSLContext,
+        configuration: Configuration,
+        customVerificationCallbackWithMetadata: @escaping NIOSSLCustomVerificationCallbackWithMetadata,
+        customErrorHandlingCallback: NIOSSLCustomErrorHandlingCallback?
+    ) {
+        self.init(
+            context: context,
+            optionalCustomVerificationCallbackManager: CustomVerifyManager(
+                callback: customVerificationCallbackWithMetadata
+            ),
             optionalAdditionalPeerCertificateVerificationCallback: nil,
             optionalCustomErrorHandlingCallback: customErrorHandlingCallback,
             configuration: configuration
@@ -104,16 +174,16 @@ public final class NIOSSLServerHandler: NIOSSLHandler {
     ) -> Self {
         .init(
             context: context,
-            optionalCustomVerificationCallback: nil,
+            optionalCustomVerificationCallbackManager: nil,
             optionalAdditionalPeerCertificateVerificationCallback: additionalPeerCertificateVerificationCallback,
-            optionalCustomErrorHandlingCallback: nil
+	    optionalCustomErrorHandlingCallback: nil
         )
     }
 
     /// This exists to handle the explosion of initializers I got when I deprecated the first one.
     private init(
         context: NIOSSLContext,
-        optionalCustomVerificationCallback: NIOSSLCustomVerificationCallback?,
+        optionalCustomVerificationCallbackManager: CustomVerifyManager?,
         optionalAdditionalPeerCertificateVerificationCallback: _NIOAdditionalPeerCertificateVerificationCallback?,
         optionalCustomErrorHandlingCallback: NIOSSLCustomErrorHandlingCallback?,
         configuration: Configuration = .init()
@@ -124,8 +194,8 @@ public final class NIOSSLServerHandler: NIOSSLHandler {
 
         connection.setAcceptState()
 
-        if let customVerificationCallback = optionalCustomVerificationCallback {
-            connection.setCustomVerificationCallback(.init(callback: customVerificationCallback))
+        if let customVerificationCallbackManager = optionalCustomVerificationCallbackManager {
+            connection.setCustomVerificationCallback(customVerificationCallbackManager)
         }
         
         if let customErrorHandlingCallback = optionalCustomErrorHandlingCallback {
@@ -141,3 +211,6 @@ public final class NIOSSLServerHandler: NIOSSLHandler {
         )
     }
 }
+
+@available(*, unavailable)
+extension NIOSSLServerHandler: Sendable {}

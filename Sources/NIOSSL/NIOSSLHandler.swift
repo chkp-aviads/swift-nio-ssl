@@ -429,10 +429,10 @@ public class NIOSSLHandler: ChannelInboundHandler, ChannelOutboundHandler, Remov
             context.fireErrorCaught(privateKeyError)
         }
 
-        // If there's a failed custom context operation, we fire both errors.
-        if let customContextError = self.connection.parentContext.customContextManager?.loadContextError {
-            context.fireErrorCaught(customContextError)
-        }
+            // If there's a failed custom context operation, we fire both errors.
+            if let customContextError = self.connection.customContextManager?.loadContextError {
+                context.fireErrorCaught(customContextError)
+            }
 
         context.fireErrorCaught(NIOSSLError.handshakeFailed(err))
         channelClose(context: context, reason: NIOSSLError.handshakeFailed(err))
@@ -835,6 +835,26 @@ extension NIOSSLHandler {
     public var peerCertificate: NIOSSLCertificate? {
         self.connection.getPeerCertificate()
     }
+
+    /// Return the *validated* certificate chain from the verified peer after handshake has completed.
+    ///
+    /// This property will only contain a value if the handler was initialized with a custom certificate verification
+    /// callback (``NIOSSLCustomVerificationCallbackWithMetadata``) *and* if the promise in the callback was
+    /// successfully completed with ``NIOSSLVerificationResultWithMetadata/certificateVerified(_:)`` (containing a
+    /// ``VerificationMetadata`` instance with a ``ValidatedCertificateChain``). If either of these conditions are not
+    /// met, this property will be `nil`.
+    ///
+    /// To create a `NIOSSLClientHandler` handler with a custom verification callback that can return the certificate
+    /// chain, use:
+    /// - ``NIOSSLClientHandler/init(context:serverHostname:customVerificationCallbackWithMetadata:)`` or
+    /// - ``NIOSSLClientHandler/init(context:serverHostname:configuration:customVerificationCallbackWithMetadata:)``
+    /// For `NIOSSLServerHandler`, use:
+    /// - ``NIOSSLServerHandler/init(context:customVerificationCallbackWithMetadata:)`` or
+    /// - ``NIOSSLServerHandler/init(context:configuration:customVerificationCallbackWithMetadata:)``
+    ///
+    public var peerValidatedCertificateChain: ValidatedCertificateChain? {
+        self.connection.customVerificationManager?.verificationMetadata?.validatedCertificateChain
+    }
 }
 
 extension Channel {
@@ -852,6 +872,12 @@ extension Channel {
         }
     }
 
+    /// API to retrieve the *validated* certificate chain of the peer. See ``NIOSSLHandler/peerValidatedCertificateChain``.
+    public func nioSSL_peerValidatedCertificateChain() -> EventLoopFuture<ValidatedCertificateChain?> {
+        self.pipeline.handler(type: NIOSSLHandler.self).map {
+            $0.peerValidatedCertificateChain
+        }
+    }
 }
 
 extension ChannelPipeline.SynchronousOperations {
@@ -865,6 +891,12 @@ extension ChannelPipeline.SynchronousOperations {
     public func nioSSL_peerCertificate() throws -> NIOSSLCertificate? {
         let handler = try self.handler(type: NIOSSLHandler.self)
         return handler.peerCertificate
+    }
+
+    /// API to retrieve the *validated* certificate chain of the peer. See ``NIOSSLHandler/peerValidatedCertificateChain``.
+    public func nioSSL_peerValidatedCertificateChain() throws -> ValidatedCertificateChain? {
+        let handler = try self.handler(type: NIOSSLHandler.self)
+        return handler.peerValidatedCertificateChain
     }
 }
 

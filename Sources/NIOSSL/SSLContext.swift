@@ -251,7 +251,7 @@ private func sslContextCallback(ssl: OpaquePointer?, arg: UnsafeMutableRawPointe
         )
     }
 
-    let parentSwiftContext = NIOSSLContext.lookupFromRawContext(ssl: ssl)
+    let parentSwiftContext = SSLConnection.loadConnectionFromSSL(ssl)
 
     // This is a safe force unwrap as this callback is only register directly after setting the manager
     var contextManager = parentSwiftContext.customContextManager!
@@ -296,10 +296,9 @@ public final class NIOSSLContext {
     fileprivate let sslContext: OpaquePointer
     private let callbackManager: CallbackManagerProtocol?
     private var keyLogManager: KeyLogCallbackManager?
-    internal var customContextManager: CustomContextManager?
     internal var pskClientConfigurationCallback: _NIOPSKClientIdentityProvider?
     internal var pskServerConfigurationCallback: _NIOPSKServerIdentityProvider?
-    internal let configuration: TLSConfiguration
+    public let configuration: TLSConfiguration
 
     /// Initialize a context that will create multiple connections, all with the same
     /// configuration.
@@ -373,8 +372,8 @@ public final class NIOSSLContext {
         }
 
         // Set the SSL Context Configuration callback.
-        if let sslContextConfigurationCallback = configuration.sslContextCallback {
-            self.customContextManager = CustomContextManager(callback: sslContextConfigurationCallback)
+        // The state is managed on the connection.
+        if configuration.sslContextCallback != nil {
             CNIOBoringSSL_SSL_CTX_set_cert_cb(context, sslContextCallback, nil)
         }
 
@@ -690,7 +689,7 @@ extension NIOSSLContext {
             // Load only the certificates that resolve to an existing certificate in the directory.
             for symPath in certificateFilePaths {
                 // c_rehash only support pem files.
-                let cert = try NIOSSLCertificate(file: symPath, format: .pem)
+                let cert = try NIOSSLCertificate(_file: symPath, format: .pem)
                 try addCACertificateNameToList(context: context, certificate: cert)
             }
         }

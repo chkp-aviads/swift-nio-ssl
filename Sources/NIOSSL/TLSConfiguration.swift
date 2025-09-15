@@ -320,9 +320,16 @@ public struct TLSConfiguration {
     ///
     /// - NOTE: If a directory path is used here to load a directory of certificates into a configuration, then the
     ///         certificates in this directory must be formatted by `c_rehash` to create the rehash file format of `HHHHHHHH.D` with a symlink.
+    ///
+    /// - NOTE: The choice of trust roots affects which certificate validation backend is used. See <doc:trust-roots-behavior>
+    ///         for detailed information about platform-specific behavior differences.
     public var trustRoots: NIOSSLTrustRoots?
 
     /// Additional trust roots to use to validate certificates, used in addition to ``trustRoots``.
+    ///
+    /// - NOTE: The combination of ``trustRoots`` and ``additionalTrustRoots`` affects which certificate validation
+    ///         backend is used on Apple platforms. See <doc:trust-roots-behavior> for detailed information about
+    ///         platform-specific behavior differences.
     public var additionalTrustRoots: [NIOSSLAdditionalTrustRoots]
 
     /// The certificates to offer during negotiation. If not present, no certificates will be offered.
@@ -453,9 +460,9 @@ public struct TLSConfiguration {
         self.signingSignatureAlgorithms = signingSignatureAlgorithms
         self.minimumTLSVersion = minimumTLSVersion
         self.maximumTLSVersion = maximumTLSVersion
-        self.certificateVerification = certificateVerification
         self.trustRoots = trustRoots
         self.additionalTrustRoots = additionalTrustRoots
+        self.certificateVerification = certificateVerification
         self.certificateChain = certificateChain
         self.privateKey = privateKey
         self.encodedApplicationProtocols = []
@@ -642,6 +649,47 @@ extension TLSConfiguration {
             privateKey: nil,
             applicationProtocols: [],
             treatNoApplicationProtocolMatchAsError: false,
+            shutdownTimeout: .seconds(5),
+            keyLogCallback: nil,
+            renegotiationSupport: .none,
+            additionalTrustRoots: [],
+            sendCANameList: false,
+            pskClientProvider: nil,
+            pskServerProvider: nil,
+            pskHint: nil
+        )
+    }
+
+    /// Create a TLS configuration for use with server-side contexts that expect to validate a client
+    /// certificate (often called mTLS).
+    ///
+    /// This provides sensible defaults while requiring that you provide any data that is necessary
+    /// for server-side function. For servers that don't need mTLS, try
+    /// ``TLSConfiguration/makeServerConfiguration(certificateChain:privateKey:)`` instead.
+    ///
+    /// This configuration is very similar to ``TLSConfiguration/makeServerConfiguration(certificateChain:privateKey:)`` but
+    /// adds a `trustRoots` requirement. These roots will be used to validate the certificate
+    /// presented by the peer. It also sets the ``certificateVerification`` field to
+    /// ``CertificateVerification/noHostnameVerification``, which enables verification but disables
+    /// any hostname checking, which cannot succeed in a server context.
+    ///
+    /// For customising fields, modify the returned TLSConfiguration object.
+    public static func makeServerConfigurationWithMTLS(
+        certificateChain: [NIOSSLCertificateSource],
+        privateKey: NIOSSLPrivateKeySource,
+        trustRoots: NIOSSLTrustRoots
+    ) -> TLSConfiguration {
+        TLSConfiguration(
+            cipherSuites: defaultCipherSuites,
+            verifySignatureAlgorithms: nil,
+            signingSignatureAlgorithms: nil,
+            minimumTLSVersion: .tlsv1,
+            maximumTLSVersion: nil,
+            certificateVerification: .noHostnameVerification,
+            trustRoots: trustRoots,
+            certificateChain: certificateChain,
+            privateKey: privateKey,
+            applicationProtocols: [],
             shutdownTimeout: .seconds(5),
             keyLogCallback: nil,
             renegotiationSupport: .none,
