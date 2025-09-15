@@ -405,6 +405,9 @@ public struct TLSConfiguration {
             self.encodedApplicationProtocols = newValue.map(encodeALPNIdentifier)
         }
     }
+    
+    /// If true, the connection will fail if no application protocol is negotiated.
+    public var treatNoApplicationProtocolMatchAsError: Bool = false
 
     internal var encodedApplicationProtocols: [[UInt8]]
 
@@ -434,6 +437,7 @@ public struct TLSConfiguration {
         certificateChain: [NIOSSLCertificateSource],
         privateKey: NIOSSLPrivateKeySource?,
         applicationProtocols: [String],
+        treatNoApplicationProtocolMatchAsError: Bool = false,
         shutdownTimeout: TimeAmount,
         keyLogCallback: NIOSSLKeyLogCallback?,
         renegotiationSupport: NIORenegotiationSupport,
@@ -459,6 +463,7 @@ public struct TLSConfiguration {
         self.renegotiationSupport = renegotiationSupport
         self.sendCANameList = sendCANameList
         self.applicationProtocols = applicationProtocols
+        self.treatNoApplicationProtocolMatchAsError = treatNoApplicationProtocolMatchAsError
         self.keyLogCallback = keyLogCallback
         self.sslContextCallback = sslContextCallback
         self.pskClientProvider = pskClientProvider
@@ -509,6 +514,7 @@ extension TLSConfiguration {
             && self.trustRoots == comparing.trustRoots && self.additionalTrustRoots == comparing.additionalTrustRoots
             && self.certificateChain == comparing.certificateChain && self.privateKey == comparing.privateKey
             && self.encodedApplicationProtocols == comparing.encodedApplicationProtocols
+            && self.treatNoApplicationProtocolMatchAsError == comparing.treatNoApplicationProtocolMatchAsError
             && self.shutdownTimeout == comparing.shutdownTimeout && isKeyLoggerCallbacksEqual
             && self.renegotiationSupport == comparing.renegotiationSupport
             && self.sendCANameList == comparing.sendCANameList && isSSLContextCallbackEqual && isPSKClientProviderEqual
@@ -533,6 +539,7 @@ extension TLSConfiguration {
         hasher.combine(certificateChain)
         hasher.combine(privateKey)
         hasher.combine(encodedApplicationProtocols)
+        hasher.combine(treatNoApplicationProtocolMatchAsError)
         hasher.combine(shutdownTimeout)
         withUnsafeBytes(of: keyLogCallback) { closureBits in
             hasher.combine(bytes: closureBits)
@@ -569,6 +576,7 @@ extension TLSConfiguration {
             certificateChain: [],
             privateKey: nil,
             applicationProtocols: [],
+            treatNoApplicationProtocolMatchAsError: false,
             shutdownTimeout: .seconds(5),
             keyLogCallback: nil,
             renegotiationSupport: .none,
@@ -602,6 +610,7 @@ extension TLSConfiguration {
             certificateChain: certificateChain,
             privateKey: privateKey,
             applicationProtocols: [],
+            treatNoApplicationProtocolMatchAsError: false,
             shutdownTimeout: .seconds(5),
             keyLogCallback: nil,
             renegotiationSupport: .none,
@@ -632,6 +641,7 @@ extension TLSConfiguration {
             certificateChain: [],
             privateKey: nil,
             applicationProtocols: [],
+            treatNoApplicationProtocolMatchAsError: false,
             shutdownTimeout: .seconds(5),
             keyLogCallback: nil,
             renegotiationSupport: .none,

@@ -109,12 +109,13 @@ private func alpnCallback(
 
     // We want to take the SSL pointer and extract the parent Swift object.
     let parentSwiftContext = NIOSSLContext.lookupFromRawContext(ssl: ssl)
+    let treatNoApplicationProtocolMatchAsError = parentSwiftContext.configuration.treatNoApplicationProtocolMatchAsError
 
     let offeredProtocols = UnsafeBufferPointer(start: `in`, count: Int(inlen))
     guard let (index, length) = parentSwiftContext.alpnSelectCallback(offeredProtocols: offeredProtocols) else {
         out.pointee = nil
         outlen.pointee = 0
-        return SSL_TLSEXT_ERR_NOACK
+        return treatNoApplicationProtocolMatchAsError ? SSL_TLSEXT_ERR_ALERT_FATAL : SSL_TLSEXT_ERR_NOACK
     }
 
     out.pointee = `in` + index
