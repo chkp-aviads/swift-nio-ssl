@@ -129,7 +129,7 @@ public final class NIOSSLServerHandler: NIOSSLHandler {
             context: context,
             optionalCustomVerificationCallbackManager: customVerificationCallback.map(CustomVerifyManager.init),
             optionalAdditionalPeerCertificateVerificationCallback: nil,
-            optionalCustomErrorHandlingCallback: nil,
+            optionalCustomErrorHandlingCallback: customErrorHandlingCallback,
             configuration: configuration
         )
     }
