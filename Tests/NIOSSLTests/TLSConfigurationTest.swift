@@ -12,6 +12,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+@_implementationOnly import CNIOBoringSSL
 @preconcurrency import Dispatch
 import NIOConcurrencyHelpers
 import NIOCore
@@ -21,12 +22,6 @@ import NIOTLS
 import XCTest
 
 @testable import NIOSSL
-
-#if compiler(>=6.1)
-internal import CNIOBoringSSL
-#else
-@_implementationOnly import CNIOBoringSSL
-#endif
 
 final class ErrorCatcher<T: Error>: ChannelInboundHandler, Sendable {
     public typealias InboundIn = Any
@@ -298,6 +293,10 @@ class TLSConfigurationTest: XCTestCase {
     func assertHandshakeSucceededEventLoop(
         withClientConfig clientConfig: TLSConfiguration,
         andServerConfig serverConfig: TLSConfiguration,
+        serverCustomVerificationCallback: (
+            @Sendable ([NIOSSLCertificate], EventLoopPromise<NIOSSLVerificationResult>) ->
+                Void
+        )? = nil,
         file: StaticString = #filePath,
         line: UInt = #line
     ) throws {
@@ -314,6 +313,7 @@ class TLSConfigurationTest: XCTestCase {
         try self.assertHandshakeSucceededEventLoop(
             withClientContext: clientContext,
             andServerContext: serverContext,
+            serverCustomVerificationCallback: serverCustomVerificationCallback,
             file: file,
             line: line
         )
@@ -325,6 +325,10 @@ class TLSConfigurationTest: XCTestCase {
     func assertHandshakeSucceededEventLoop(
         withClientContext clientContext: NIOSSLContext,
         andServerContext serverContext: NIOSSLContext,
+        serverCustomVerificationCallback: (
+            @Sendable ([NIOSSLCertificate], EventLoopPromise<NIOSSLVerificationResult>) ->
+                Void
+        )? = nil,
         file: StaticString = #filePath,
         line: UInt = #line
     ) throws {
@@ -339,7 +343,12 @@ class TLSConfigurationTest: XCTestCase {
         let handshakeWatcher = WaitForHandshakeHandler(handshakeResultPromise: handshakeResultPromise)
 
         let serverChannel = try assertNoThrowWithValue(
-            serverTLSChannel(context: serverContext, handlers: [], group: group),
+            serverTLSChannel(
+                context: serverContext,
+                handlers: [],
+                group: group,
+                customVerificationCallback: serverCustomVerificationCallback
+            ),
             file: file,
             line: line
         )
@@ -541,6 +550,69 @@ class TLSConfigurationTest: XCTestCase {
             andServerConfig: serverConfig,
             errorTextContainsAnyOf: ["ALERT_UNKNOWN_CA", "ALERT_CERTIFICATE_UNKNOWN"]
         )
+    }
+
+    func testMutualValidationWithCertVerificationOptionalSuccess_NoPeerCert() throws {
+        // The client doesn't present a cert chain
+        var clientConfig = TLSConfiguration.makeClientConfiguration()
+        clientConfig.certificateVerification = .noHostnameVerification
+        clientConfig.trustRoots = .default
+        clientConfig.additionalTrustRoots = [.certificates([TLSConfigurationTest.cert1])]
+
+        var serverConfig = TLSConfiguration.makeServerConfiguration(
+            certificateChain: [.certificate(TLSConfigurationTest.cert1)],
+            privateKey: .privateKey(TLSConfigurationTest.key1)
+        )
+        // The server sets `certificateVerification` to `optionalVerification`; handshake should succeed when the client
+        // hasn't presented any certs
+        serverConfig.certificateVerification = .optionalVerification
+        serverConfig.trustRoots = .default
+
+        try assertHandshakeSucceeded(withClientConfig: clientConfig, andServerConfig: serverConfig)
+    }
+
+    func testMutualValidationWithCertVerificationOptionalError_PeerCertNotTrusted() throws {
+        var clientConfig = TLSConfiguration.makeClientConfiguration()
+        clientConfig.certificateChain = [.certificate(TLSConfigurationTest.cert2)]
+        clientConfig.privateKey = .privateKey(TLSConfigurationTest.key2)
+        clientConfig.certificateVerification = .noHostnameVerification
+        clientConfig.trustRoots = .default
+        clientConfig.additionalTrustRoots = [.certificates([TLSConfigurationTest.cert1])]
+
+        var serverConfig = TLSConfiguration.makeServerConfiguration(
+            certificateChain: [.certificate(TLSConfigurationTest.cert1)],
+            privateKey: .privateKey(TLSConfigurationTest.key1)
+        )
+        serverConfig.certificateVerification = .optionalVerification
+        serverConfig.trustRoots = .default
+        // The server doesn't trust any additional roots; the cert presented by the client will not be trusted
+        serverConfig.additionalTrustRoots = []
+
+        try assertPostHandshakeError(
+            withClientConfig: clientConfig,
+            andServerConfig: serverConfig,
+            errorTextContainsAnyOf: ["SSLV3_ALERT_CERTIFICATE_UNKNOWN", "TLSV1_ALERT_UNKNOWN_CA"]
+        )
+    }
+
+    func testMutualValidationWithCertVerificationOptionalSuccess_PeerCertTrusted() throws {
+        var clientConfig = TLSConfiguration.makeClientConfiguration()
+        clientConfig.certificateChain = [.certificate(TLSConfigurationTest.cert2)]
+        clientConfig.privateKey = .privateKey(TLSConfigurationTest.key2)
+        clientConfig.certificateVerification = .noHostnameVerification
+        clientConfig.trustRoots = .default
+        clientConfig.additionalTrustRoots = [.certificates([TLSConfigurationTest.cert1])]
+
+        var serverConfig = TLSConfiguration.makeServerConfiguration(
+            certificateChain: [.certificate(TLSConfigurationTest.cert1)],
+            privateKey: .privateKey(TLSConfigurationTest.key1)
+        )
+        serverConfig.certificateVerification = .optionalVerification
+        serverConfig.trustRoots = .default
+        // The server trusts the cert presented by the client; we expect a successful handshake
+        serverConfig.additionalTrustRoots = [.certificates([TLSConfigurationTest.cert2])]
+
+        try assertHandshakeSucceeded(withClientConfig: clientConfig, andServerConfig: serverConfig)
     }
 
     func testMutualValidationRequiresClientCertificatePreTLS13() throws {
@@ -2039,6 +2111,43 @@ class TLSConfigurationTest: XCTestCase {
         serverConfig.trustRoots = .certificates([TLSConfigurationTest.cert2])
 
         try assertHandshakeSucceeded(withClientConfig: clientConfig, andServerConfig: serverConfig)
+    }
+
+    /// This test ensures that, when a certificate is overriden, only the new chain is sent, not the previous one.
+    /// This test would have failed prior to the commit in which it was added.
+    func testClientSideCertSelectionWithChain() throws {
+        let (testIntermediate, _) = generateSelfSignedCert()
+        let (testLeaf, privateKey) = generateSelfSignedCert()
+        var clientConfig = TLSConfiguration.makeClientConfiguration()
+        clientConfig.certificateChain = [.certificate(testLeaf), .certificate(testIntermediate)]
+        clientConfig.privateKey = .privateKey(privateKey)
+
+        clientConfig.certificateVerification = .noHostnameVerification
+        clientConfig.trustRoots = .certificates([TLSConfigurationTest.cert1])
+        // This callback should be a no-op, it returns the same certs we had already set anyway
+        clientConfig.sslContextCallback = { _, promise in
+            var `override` = NIOSSLContextConfigurationOverride()
+            override.certificateChain = [.certificate(testLeaf), .certificate(testIntermediate)]
+            override.privateKey = .privateKey(privateKey)
+            promise.succeed(override)
+        }
+
+        var serverConfig = TLSConfiguration.makeServerConfiguration(
+            certificateChain: [.certificate(TLSConfigurationTest.cert1)],
+            privateKey: .privateKey(TLSConfigurationTest.key1)
+        )
+        serverConfig.certificateVerification = .noHostnameVerification
+
+        try assertHandshakeSucceededEventLoop(
+            withClientConfig: clientConfig,
+            andServerConfig: serverConfig,
+            serverCustomVerificationCallback: { certificates, promise in
+                XCTAssertEqual(certificates.count, 2)
+                XCTAssertEqual(certificates, [testLeaf, testIntermediate])
+                // Always succeed for the purposes of this test
+                promise.succeed(.certificateVerified)
+            }
+        )
     }
 
     func testServerSideCertSelection() throws {

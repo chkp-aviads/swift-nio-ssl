@@ -12,6 +12,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+@_implementationOnly import CNIOBoringSSL
 import NIOConcurrencyHelpers
 import NIOCore
 import NIOEmbedded
@@ -20,12 +21,6 @@ import NIOTLS
 import XCTest
 
 @testable import NIOSSL
-
-#if compiler(>=6.1)
-internal import CNIOBoringSSL
-#else
-@_implementationOnly import CNIOBoringSSL
-#endif
 
 public func assertNoThrowWithValue<T>(
     _ body: @autoclosure () throws -> T,
@@ -376,6 +371,10 @@ internal func serverTLSChannel(
     context: NIOSSLContext,
     handlers: @autoclosure @escaping @Sendable () -> [ChannelHandler],
     group: EventLoopGroup,
+    customVerificationCallback: (
+        @Sendable ([NIOSSLCertificate], EventLoopPromise<NIOSSLVerificationResult>) ->
+            Void
+    )? = nil,
     file: StaticString = #filePath,
     line: UInt = #line
 ) throws -> Channel {
@@ -385,6 +384,7 @@ internal func serverTLSChannel(
             preHandlers: [],
             postHandlers: handlers(),
             group: group,
+            customVerificationCallback: customVerificationCallback,
             file: file,
             line: line
         ),
@@ -428,8 +428,8 @@ internal func serverTLSChannel(
     )
 }
 
-typealias SendableAdditionalPeerCertificateVerificationCallback = @Sendable (NIOSSLCertificate, Channel) ->
-    EventLoopFuture<Void>
+typealias SendableAdditionalPeerCertificateVerificationCallback =
+    @Sendable (NIOSSLCertificate, Channel) -> EventLoopFuture<Void>
 
 internal func clientTLSChannel(
     context: NIOSSLContext,
@@ -472,7 +472,8 @@ private struct DeprecatedTLSProviderForTests<Bootstrap: NIOClientTCPBootstrapPro
     public init(
         context: NIOSSLContext,
         serverHostname: String?,
-        verificationCallback: @escaping @Sendable (NIOSSLVerificationResult, NIOSSLCertificate) ->
+        verificationCallback:
+            @escaping @Sendable (NIOSSLVerificationResult, NIOSSLCertificate) ->
             NIOSSLVerificationResult
     ) {
         self.context = context
@@ -481,14 +482,14 @@ private struct DeprecatedTLSProviderForTests<Bootstrap: NIOClientTCPBootstrapPro
     }
 
     public func enableTLS(_ bootstrap: Bootstrap) -> Bootstrap {
-        bootstrap.protocolHandlers {
+        bootstrap.protocolHandlers { [context, serverHostname, verificationCallback] in
             // NIOSSLClientHandler.init only throws because of `malloc` error and invalid SNI hostnames. We want to crash
             // on malloc error and we pre-checked the SNI hostname in `init` so that should be impossible here.
             [
                 try! NIOSSLClientHandler(
-                    context: self.context,
-                    serverHostname: self.serverHostname,
-                    verificationCallback: self.verificationCallback
+                    context: context,
+                    serverHostname: serverHostname,
+                    verificationCallback: verificationCallback
                 )
             ]
         }
@@ -2596,6 +2597,170 @@ class NIOSSLIntegrationTest: XCTestCase {
         }
 
         // This connection should succeed, as certificate verification is disabled.
+        XCTAssertNoThrow(try handshakeCompletePromise.futureResult.wait())
+    }
+
+    func testMacOSConnectionFailsIfServerVerificationOptionalAndPeerPresentsUntrustedCert() throws {
+        // This test checks that when setting verification to `.optionalVerification`, a peer cannot successfully
+        // connect when they present an untrusted certificate. On macOS, this exercises the SecTrust validation backend,
+        // as `serverConfig.trustRoots` is set to `.default` (see the behavioral matrix in
+        // `NIOSSL/Docs/trust-roots-behavior.md`).
+        var serverConfig = TLSConfiguration.makeServerConfiguration(
+            certificateChain: [.certificate(NIOSSLIntegrationTest.cert)],
+            privateKey: .privateKey(NIOSSLIntegrationTest.key)
+        )
+        serverConfig.certificateVerification = .optionalVerification
+        serverConfig.trustRoots = .default
+
+        var clientConfig = TLSConfiguration.makeClientConfiguration()
+        clientConfig.certificateVerification = .noHostnameVerification
+        clientConfig.trustRoots = .default
+        clientConfig.additionalTrustRoots = [.certificates([NIOSSLIntegrationTest.cert])]
+        // The client presents a random cert but the server won't trust it
+        let clientCertAndPrivateKey = generateSelfSignedCert()
+        clientConfig.certificateChain = [.certificate(clientCertAndPrivateKey.0)]
+        clientConfig.privateKey = .privateKey(clientCertAndPrivateKey.1)
+
+        let serverContext = try assertNoThrowWithValue(NIOSSLContext(configuration: serverConfig))
+        let clientContext = try assertNoThrowWithValue(NIOSSLContext(configuration: clientConfig))
+
+        let group = MultiThreadedEventLoopGroup(numberOfThreads: 1)
+        defer {
+            XCTAssertNoThrow(try group.syncShutdownGracefully())
+        }
+
+        let handshakeCompletePromise = group.next().makePromise(of: Void.self)
+        let serverChannel: Channel = try serverTLSChannel(
+            context: serverContext,
+            handlers: [WaitForHandshakeHandler(handshakeResultPromise: handshakeCompletePromise)],
+            group: group
+        )
+        defer {
+            XCTAssertNoThrow(try serverChannel.close().wait())
+        }
+
+        let clientChannel = try clientTLSChannel(
+            context: clientContext,
+            preHandlers: [],
+            postHandlers: [],
+            group: group,
+            connectingTo: serverChannel.localAddress!,
+            serverHostname: "localhost"
+        )
+        defer {
+            XCTAssertNoThrow(try clientChannel.close().wait())
+        }
+
+        // The handshake should fail: certificate verification is optional and the client hasn't presented any certs.
+        XCTAssertThrowsError(try handshakeCompletePromise.futureResult.wait())
+    }
+
+    func testMacOSConnectionSuccessfulIfServerVerificationOptionalAndPeerPresentsTrustedCert() throws {
+        // This test checks that when setting verification to `.optionalVerification`, a peer can successfully
+        // connect when they present a trusted certificate. On macOS, this exercises the SecTrust validation backend,
+        // as `serverConfig.trustRoots` is set to `.default` and the client cert is registered under
+        // `additionalTrustRoots` (see the behavioral matrix in `NIOSSL/Docs.docc/trust-roots-behavior.md`).
+        var clientConfig = TLSConfiguration.makeClientConfiguration()
+        clientConfig.certificateVerification = .noHostnameVerification
+        clientConfig.trustRoots = .default
+        clientConfig.additionalTrustRoots = [.certificates([NIOSSLIntegrationTest.cert])]
+        // The client presents a generated cert
+        let clientCertAndPrivateKey = generateSelfSignedCert()
+        clientConfig.certificateChain = [.certificate(clientCertAndPrivateKey.0)]
+        clientConfig.privateKey = .privateKey(clientCertAndPrivateKey.1)
+
+        var serverConfig = TLSConfiguration.makeServerConfiguration(
+            certificateChain: [.certificate(NIOSSLIntegrationTest.cert)],
+            privateKey: .privateKey(NIOSSLIntegrationTest.key)
+        )
+        serverConfig.certificateVerification = .optionalVerification
+        serverConfig.trustRoots = .default
+        // The server trusts the client's generated cert
+        serverConfig.additionalTrustRoots = [.certificates([clientCertAndPrivateKey.0])]
+
+        let serverContext = try assertNoThrowWithValue(NIOSSLContext(configuration: serverConfig))
+        let clientContext = try assertNoThrowWithValue(NIOSSLContext(configuration: clientConfig))
+
+        let group = MultiThreadedEventLoopGroup(numberOfThreads: 1)
+        defer {
+            XCTAssertNoThrow(try group.syncShutdownGracefully())
+        }
+
+        let handshakeCompletePromise = group.next().makePromise(of: Void.self)
+        let serverChannel: Channel = try serverTLSChannel(
+            context: serverContext,
+            handlers: [WaitForHandshakeHandler(handshakeResultPromise: handshakeCompletePromise)],
+            group: group
+        )
+        defer {
+            XCTAssertNoThrow(try serverChannel.close().wait())
+        }
+
+        let clientChannel = try clientTLSChannel(
+            context: clientContext,
+            preHandlers: [],
+            postHandlers: [],
+            group: group,
+            connectingTo: serverChannel.localAddress!,
+            serverHostname: "localhost"
+        )
+        defer {
+            XCTAssertNoThrow(try clientChannel.close().wait())
+        }
+
+        // The handshake should succeed: verification is optional, and the client presents a cert the server trusts.
+        XCTAssertNoThrow(try handshakeCompletePromise.futureResult.wait())
+    }
+
+    func testMacOSConnectionSuccessfulIfServerVerificationOptionalAndNoPeerCert() throws {
+        // This test checks that when setting verification to `.optionalVerification`, a peer can successfully connect
+        // when they don't present any certificate. On macOS, this exercises the SecTrust validation backend, as
+        // `serverConfig.trustRoots` is set to `.default` (see the behavioral matrix in
+        // `NIOSSL/Docs.docc/trust-roots-behavior.md`).
+        var serverConfig = TLSConfiguration.makeServerConfiguration(
+            certificateChain: [.certificate(NIOSSLIntegrationTest.cert)],
+            privateKey: .privateKey(NIOSSLIntegrationTest.key)
+        )
+        serverConfig.certificateVerification = .optionalVerification
+        serverConfig.trustRoots = .default
+
+        // The client doesn't present any certs
+        var clientConfig = TLSConfiguration.makeClientConfiguration()
+        clientConfig.certificateVerification = .noHostnameVerification
+        clientConfig.trustRoots = .default
+        clientConfig.additionalTrustRoots = [.certificates([NIOSSLIntegrationTest.cert])]
+
+        let serverContext = try assertNoThrowWithValue(NIOSSLContext(configuration: serverConfig))
+        let clientContext = try assertNoThrowWithValue(NIOSSLContext(configuration: clientConfig))
+
+        let group = MultiThreadedEventLoopGroup(numberOfThreads: 1)
+        defer {
+            XCTAssertNoThrow(try group.syncShutdownGracefully())
+        }
+
+        let handshakeCompletePromise = group.next().makePromise(of: Void.self)
+        let serverChannel: Channel = try serverTLSChannel(
+            context: serverContext,
+            handlers: [WaitForHandshakeHandler(handshakeResultPromise: handshakeCompletePromise)],
+            group: group
+        )
+        defer {
+            XCTAssertNoThrow(try serverChannel.close().wait())
+        }
+
+        let clientChannel = try clientTLSChannel(
+            context: clientContext,
+            preHandlers: [],
+            postHandlers: [],
+            group: group,
+            connectingTo: serverChannel.localAddress!,
+            serverHostname: "localhost"
+        )
+        defer {
+            XCTAssertNoThrow(try clientChannel.close().wait())
+        }
+
+        // The handshake should succeed: certificate verification is optional and the client hasn't presented any certs.
         XCTAssertNoThrow(try handshakeCompletePromise.futureResult.wait())
     }
 

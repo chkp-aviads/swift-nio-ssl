@@ -12,14 +12,9 @@
 //
 //===----------------------------------------------------------------------===//
 
+@_implementationOnly import CNIOBoringSSL
 import NIOCore
 import NIOTLS
-
-#if compiler(>=6.1)
-internal import CNIOBoringSSL
-#else
-@_implementationOnly import CNIOBoringSSL
-#endif
 
 /// The base class for all NIOSSL handlers.
 ///
@@ -83,7 +78,7 @@ public class NIOSSLHandler: ChannelInboundHandler, ChannelOutboundHandler, Remov
         let tlsConfiguration = connection.parentContext.configuration
         precondition(
             additionalPeerCertificateVerificationCallback == nil || tlsConfiguration.certificateVerification != .none,
-            "TLSConfiguration.certificateVerification must be either set to .noHostnameVerification or .fullVerification if additionalPeerCertificateVerificationCallback is specified"
+            "TLSConfiguration.certificateVerification must be either set to .optionalVerification, .noHostnameVerification, or .fullVerification if additionalPeerCertificateVerificationCallback is specified"
         )
         self.connection = connection
         // 96 brings the total size of the buffer to just shy of one page
