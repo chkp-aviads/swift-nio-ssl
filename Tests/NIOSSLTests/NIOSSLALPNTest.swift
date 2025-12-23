@@ -20,14 +20,67 @@ import NIOTLS
 import XCTest
 
 class NIOSSLALPNTest: XCTestCase {
-    private func configuredSSLContextWithAlpnProtocols(protocols: [String]) throws -> NIOSSLContext {
+    private func configuredSSLContextWithAlpnProtocols(
+        protocols: [String],
+        treatNoApplicationProtocolMatchAsError: Bool = false
+    ) throws -> NIOSSLContext {
         var config = TLSConfiguration.makeServerConfiguration(
             certificateChain: [.certificate(NIOSSLIntegrationTest.cert)],
             privateKey: .privateKey(NIOSSLIntegrationTest.key)
         )
         config.trustRoots = .certificates([NIOSSLIntegrationTest.cert])
         config.applicationProtocols = protocols
+        config.treatNoApplicationProtocolMatchAsError = treatNoApplicationProtocolMatchAsError
         return try NIOSSLContext(configuration: config)
+    }
+
+    private final class HandshakeFailedPromiseHandler: ChannelInboundHandler, @unchecked Sendable {
+        typealias InboundIn = Any
+
+        private let promise: EventLoopPromise<NIOSSLError>
+
+        init(promise: EventLoopPromise<NIOSSLError>) {
+            self.promise = promise
+        }
+
+        func errorCaught(context: ChannelHandlerContext, error: Error) {
+            if let error = error as? NIOSSLError, case .handshakeFailed = error {
+                self.promise.succeed(error)
+            }
+            context.fireErrorCaught(error)
+        }
+    }
+
+    private func assertHandshakeFails(serverContext: NIOSSLContext, clientContext: NIOSSLContext) throws {
+        let group = MultiThreadedEventLoopGroup(numberOfThreads: 1)
+        defer {
+            XCTAssertNoThrow(try group.syncShutdownGracefully())
+        }
+
+        let errorPromise = group.next().makePromise(of: NIOSSLError.self)
+        let serverHandler = HandshakeFailedPromiseHandler(promise: errorPromise)
+
+        let serverChannel = try serverTLSChannel(
+            context: serverContext,
+            handlers: [serverHandler],
+            group: group
+        )
+        defer {
+            XCTAssertNoThrow(try serverChannel.close().wait())
+        }
+
+        let clientChannel = try clientTLSChannel(
+            context: clientContext,
+            preHandlers: [],
+            postHandlers: [],
+            group: group,
+            connectingTo: serverChannel.localAddress!
+        )
+        defer {
+            XCTAssertNoThrow(try clientChannel.close().wait())
+        }
+
+        _ = try errorPromise.futureResult.timeout(after: .seconds(5)).wait()
     }
 
     private func assertNegotiatedProtocol(
@@ -104,6 +157,20 @@ class NIOSSLALPNTest: XCTestCase {
         XCTAssertNoThrow(
             try assertNegotiatedProtocol(protocol: nil, serverContext: serverCtx, clientContext: clientCtx)
         )
+    }
+
+    func testTreatNoApplicationProtocolMatchAsErrorFailsHandshakeOnNoOverlap() throws {
+        let serverCtx = try assertNoThrowWithValue(
+            configuredSSLContextWithAlpnProtocols(
+                protocols: ["h2", "http/1.1"],
+                treatNoApplicationProtocolMatchAsError: true
+            )
+        )
+        let clientCtx = try assertNoThrowWithValue(
+            configuredSSLContextWithAlpnProtocols(protocols: ["spdy/3", "webrtc"])
+        )
+
+        XCTAssertNoThrow(try assertHandshakeFails(serverContext: serverCtx, clientContext: clientCtx))
     }
 
     func testBasicALPNNegotiationNotOfferedByClient() throws {
