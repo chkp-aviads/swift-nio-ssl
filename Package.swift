@@ -32,7 +32,7 @@ import PackageDescription
 func generateDependencies() -> [Package.Dependency] {
     if Context.environment["SWIFTCI_USE_LOCAL_DEPS"] == nil {
         return [
-            .package(url: "https://github.com/chkp-aviads/swift-nio.git", from: "2.84.0"),
+            .package(url: "https://github.com/chkp-aviads/swift-nio.git", from: "2.96.1"),
         ]
     } else {
         return [
