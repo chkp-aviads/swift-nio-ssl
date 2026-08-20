@@ -429,15 +429,15 @@ class TLSConfigurationTest: XCTestCase {
         leafCert: NIOSSLCertificate, leafKey: NIOSSLPrivateKey,
         clientCert: NIOSSLCertificate, clientKey: NIOSSLPrivateKey
     ) {
-        let leaf = try NIOSSLCertificate(bytes: .init(leafCertificateForTLSIssuedFromCustomCARoot.utf8), format: .pem)
-        let leaf_privateKey = try NIOSSLPrivateKey.init(bytes: .init(privateKeyForLeafCertificate.utf8), format: .pem)
+        let leaf = try NIOSSLCertificate(bytes: .init(customChain.serverLeafCertificatePEM.utf8), format: .pem)
+        let leaf_privateKey = try NIOSSLPrivateKey(bytes: .init(customChain.serverPrivateKeyPEM.utf8), format: .pem)
 
         let client_cert = try NIOSSLCertificate(
-            bytes: .init(leafCertificateForClientAuthenticationIssuedFromCustomCARoot.utf8),
+            bytes: .init(customChain.clientLeafCertificatePEM.utf8),
             format: .pem
         )
-        let client_privateKey = try NIOSSLPrivateKey.init(
-            bytes: .init(privateKeyForClientAuthentication.utf8),
+        let client_privateKey = try NIOSSLPrivateKey(
+            bytes: .init(customChain.clientPrivateKeyPEM.utf8),
             format: .pem
         )
         return (leaf, leaf_privateKey, client_cert, client_privateKey)
@@ -764,7 +764,7 @@ class TLSConfigurationTest: XCTestCase {
 
     func testFullVerificationWithCANamesFromCertificate() throws {
         // Custom certificates for TLS and client authentication.
-        let root = try NIOSSLCertificate(bytes: .init(customCARoot.utf8), format: .pem)
+        let root = try NIOSSLCertificate(bytes: .init(customChain.rootPEM.utf8), format: .pem)
 
         let digitalIdentities = try setupTLSLeafandClientIdentitiesFromCustomCARoot()
 
@@ -839,7 +839,7 @@ class TLSConfigurationTest: XCTestCase {
         // Custom certificates for TLS and client authentication.
         // In this test create the root certificate in the tmp directory and use it here to send the CA names.
         // This exercised the loadVerifyLocations file code path out in SSLContext
-        let rootPath = try dumpToFile(data: .init(customCARoot.utf8), fileExtension: ".pem")
+        let rootPath = try dumpToFile(data: .init(customChain.rootPEM.utf8), fileExtension: ".pem")
 
         let digitalIdentities = try setupTLSLeafandClientIdentitiesFromCustomCARoot()
 
@@ -915,7 +915,11 @@ class TLSConfigurationTest: XCTestCase {
         // Use the test name as the directory name in the temporary directory.
         let testName = String("\(#function)".dropLast(2))
         // Create 2 PEM based certs
-        let rootCAPathOne = try dumpToFile(data: .init(customCARoot.utf8), fileExtension: ".pem", customPath: testName)
+        let rootCAPathOne = try dumpToFile(
+            data: .init(customChain.rootPEM.utf8),
+            fileExtension: ".pem",
+            customPath: testName
+        )
         let rootCAPathTwo = try dumpToFile(
             data: .init(secondaryRootCertificateForClientAuthentication.utf8),
             fileExtension: ".pem",
@@ -1004,7 +1008,11 @@ class TLSConfigurationTest: XCTestCase {
         XCTAssertFalse(acceptablePathAndRehashFormatButNoSymlink)
 
         // Test actual symlink
-        let rootCAPathOne = try dumpToFile(data: .init(customCARoot.utf8), fileExtension: ".pem", customPath: testName)
+        let rootCAPathOne = try dumpToFile(
+            data: .init(customChain.rootPEM.utf8),
+            fileExtension: ".pem",
+            customPath: testName
+        )
         let rehashSymlinkName = getRehashFilename(path: rootCAPathOne, testName: testName, numericExtension: 0)
 
         // Extract just the filename of the newly create certs in the tmp directory.
@@ -1222,7 +1230,7 @@ class TLSConfigurationTest: XCTestCase {
         try assertHandshakeSucceeded(withClientConfig: clientConfig, andServerConfig: serverConfig)
     }
 
-    func testDefaultCurvesExcludePQ() throws {
+    func testDefaultCurvesIncludePQ() throws {
         var clientConfig = TLSConfiguration.makeClientConfiguration()
         clientConfig.curves = [.x25519_MLKEM768]
         clientConfig.certificateVerification = .noHostnameVerification
@@ -1233,11 +1241,7 @@ class TLSConfigurationTest: XCTestCase {
             privateKey: .privateKey(TLSConfigurationTest.key1)
         )
         serverConfig.certificateVerification = .none
-        try assertHandshakeError(
-            withClientConfig: clientConfig,
-            andServerConfig: serverConfig,
-            errorTextContains: "ALERT_HANDSHAKE_FAILURE"
-        )
+        try assertHandshakeSucceeded(withClientConfig: clientConfig, andServerConfig: serverConfig)
     }
 
     func testUnknownCurveValuesFail() throws {
@@ -1250,6 +1254,25 @@ class TLSConfigurationTest: XCTestCase {
                 "Error \(error) does not contain UNSUPPORTED_ELLIPTIC_CURVE"
             )
         }
+    }
+
+    func testExplicitClassicalCurvesExcludePQ() throws {
+        var clientConfig = TLSConfiguration.makeClientConfiguration()
+        clientConfig.curves = [.x25519_MLKEM768]
+        clientConfig.certificateVerification = .noHostnameVerification
+        clientConfig.trustRoots = .certificates([TLSConfigurationTest.cert1])
+
+        var serverConfig = TLSConfiguration.makeServerConfiguration(
+            certificateChain: [.certificate(TLSConfigurationTest.cert1)],
+            privateKey: .privateKey(TLSConfigurationTest.key1)
+        )
+        serverConfig.curves = [.x25519, .secp256r1, .secp384r1]
+        serverConfig.certificateVerification = .none
+        try assertHandshakeError(
+            withClientConfig: clientConfig,
+            andServerConfig: serverConfig,
+            errorTextContains: "ALERT_HANDSHAKE_FAILURE"
+        )
     }
 
     func testCompatibleCipherSuite() throws {
@@ -1916,6 +1939,57 @@ class TLSConfigurationTest: XCTestCase {
         serverConfig.pskServerProvider = pskServerProvider
         serverConfig.pskHint = "serverPskHint"
         try assertHandshakeSucceeded(withClientConfig: clientConfig, andServerConfig: serverConfig)
+    }
+
+    func testTLSPSKClientIdentityLengthBoundary() throws {
+        // BoringSSL's client handshake gives the callback a `char identity[PSK_MAX_IDENTITY_LEN + 1]` buffer and passes
+        // its full size as `max_identity_len`, reserving the final byte for the NUL terminator.  An identity of exactly
+        // `max_identity_len` bytes fills the buffer with no room for the NUL and must be rejected.
+
+        func makeClientConfig(identity: String) -> TLSConfiguration {
+            var config = TLSConfiguration.makeClientConfiguration()
+            config.certificateVerification = .none
+            config.minimumTLSVersion = .tlsv1
+            config.maximumTLSVersion = .tlsv12
+            config.pskHint = "clientPskHint"
+            let provider: NIOPSKClientIdentityProvider = {
+                (_: PSKClientContext) -> PSKClientIdentityResponse in
+                var psk = NIOSSLSecureBytes()
+                psk.append("hello".utf8)
+                return PSKClientIdentityResponse(key: psk, identity: identity)
+            }
+            config.pskClientProvider = provider
+            return config
+        }
+
+        func makeServerConfig(expectedIdentity: String) -> TLSConfiguration {
+            var config = TLSConfiguration.makePreSharedKeyConfiguration()
+            config.minimumTLSVersion = .tlsv1
+            config.maximumTLSVersion = .tlsv12
+            config.pskHint = "serverPskHint"
+            let provider: NIOPSKServerIdentityProvider = {
+                (context: PSKServerContext) -> PSKServerIdentityResponse in
+                XCTAssertEqual(context.clientIdentity, expectedIdentity)
+                var psk = NIOSSLSecureBytes()
+                psk.append("hello".utf8)
+                return PSKServerIdentityResponse(key: psk)
+            }
+            config.pskServerProvider = provider
+            return config
+        }
+
+        let maxValidIdentity = String(repeating: "A", count: Int(PSK_MAX_IDENTITY_LEN))
+        try assertHandshakeSucceeded(
+            withClientConfig: makeClientConfig(identity: maxValidIdentity),
+            andServerConfig: makeServerConfig(expectedIdentity: maxValidIdentity)
+        )
+
+        let overlongIdentity = String(repeating: "A", count: Int(PSK_MAX_IDENTITY_LEN + 1))
+        try assertHandshakeError(
+            withClientConfig: makeClientConfig(identity: overlongIdentity),
+            andServerConfig: makeServerConfig(expectedIdentity: overlongIdentity),
+            errorTextContains: "PSK_IDENTITY_NOT_FOUND"
+        )
     }
 
     func testTLSPSKWithPinnedCiphers() throws {

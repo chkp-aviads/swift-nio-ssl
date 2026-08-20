@@ -143,6 +143,26 @@ let certWithAllSupportedSANTypes = """
     -----END CERTIFICATE-----
     """
 
+// A certificate whose SAN extension carries a non-string GeneralName (an `otherName`)
+// followed by a `dNSName`, used to check how NIOSSL surfaces the contents of each. Created with:
+// openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -sha256 -days 3650 -nodes \
+//   -keyout key.pem -out cert.pem -subj '/CN=example.com' \
+//   -addext 'subjectAltName=otherName:1.3.6.1.4.1.311.20.2.3;UTF8:upn@example.com,DNS:example.com'
+let certWithOtherNameSAN = """
+    -----BEGIN CERTIFICATE-----
+    MIIBvTCCAWKgAwIBAgIUG5kO7W4Q1Iegri+QiAVHM/U31kEwCgYIKoZIzj0EAwIw
+    FjEUMBIGA1UEAwwLZXhhbXBsZS5jb20wHhcNMjYwNzA3MTcyNDUxWhcNMzYwNzA0
+    MTcyNDUxWjAWMRQwEgYDVQQDDAtleGFtcGxlLmNvbTBZMBMGByqGSM49AgEGCCqG
+    SM49AwEHA0IABLiGGM7RdaZShwg6MY//g7ir6KBD+mdSAurHLKNCk0st89Gto1ab
+    zzOWNaRFy5D851aF+xDxo6t3tlAXvFhKEW2jgY0wgYowHQYDVR0OBBYEFOCHFhfI
+    biL4d3CFvgMxL88RiUE5MB8GA1UdIwQYMBaAFOCHFhfIbiL4d3CFvgMxL88RiUE5
+    MA8GA1UdEwEB/wQFMAMBAf8wNwYDVR0RBDAwLqAfBgorBgEEAYI3FAIDoBEMD3Vw
+    bkBleGFtcGxlLmNvbYILZXhhbXBsZS5jb20wCgYIKoZIzj0EAwIDSQAwRgIhAPC/
+    NL85+5HvlzDn6BFkG8MEEfFM+tIi1Bc00qcNWr3lAiEAszKnEc5QUNdoRbagZOGs
+    b7zWUh0L+LBUmEO6a6XsJp0=
+    -----END CERTIFICATE-----
+    """
+
 func makeTemporaryFile(fileExtension: String = "", customPath: String = "") throws -> String {
     var template = "\(FileManager.default.temporaryDirectory.path)/niotestXXXXXXX\(fileExtension)"
     // If a custom file path is passed in then a new directory has to also be created.  Then the file can be written to that directory.
@@ -419,6 +439,26 @@ class SSLCertificateTest: XCTestCase {
         XCTAssertEqual(String(decoding: sans[5].contents, as: UTF8.self), "http://example.com/path?query=param")
         XCTAssertEqual(sans[6].nameType, .uri)
         XCTAssertEqual(String(decoding: sans[6].contents, as: UTF8.self), "http://example.org/")
+    }
+
+    func testSubjectAlternativeNameWithNonStringTypeHasEmptyContents() throws {
+        // NIOSSL exposes the raw bytes of a subject alternative name only for the string-shaped
+        // GeneralName types (dNSName, rfc822Name, uniformResourceIdentifier, iPAddress). Names of
+        // any other type (otherName, x400Address, directoryName, ediPartyName, registeredID) have
+        // empty `contents`. String-typed names in the same certificate are read as normal.
+        let cert = try NIOSSLCertificate(bytes: .init(certWithOtherNameSAN.utf8), format: .pem)
+        let sans = cert._subjectAlternativeNames()
+        XCTAssertEqual(sans.count, 2)
+
+        // otherName is not a string-shaped type (its raw GeneralName value is 0), so its contents
+        // are empty.
+        XCTAssertEqual(sans[0].nameType.rawValue, 0)
+        XCTAssertEqual(sans[0].contents.count, 0)
+        XCTAssertEqual(Array(sans[0].contents), [])
+
+        // dNSName is a string-shaped type, so its contents are the name's bytes.
+        XCTAssertEqual(sans[1].nameType, .dnsName)
+        XCTAssertEqual(String(decoding: sans[1].contents, as: UTF8.self), "example.com")
     }
 
     func testSubjectName() throws {
