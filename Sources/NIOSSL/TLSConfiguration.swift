@@ -399,6 +399,12 @@ public struct TLSConfiguration {
     /// SSL Context Callback to provide dynamic context based on server name
     public var sslContextCallback: NIOSSLContextCallback? = nil
 
+    /// Invoked on a client when the server requests a client certificate.
+    ///
+    /// Return `false` to fail the handshake rather than continue without a certificate.
+    /// See ``NIOSSLClientCertificateRequestCallback``. Ignored by server-side contexts.
+    public var clientCertificateRequestCallback: NIOSSLClientCertificateRequestCallback? = nil
+
     @available(*, deprecated, message: "Deprecated in favor of pskServerProvider which can handle optional hint")
     public var pskServerCallback: NIOPSKServerIdentityCallback? {
         get {
@@ -492,6 +498,7 @@ public struct TLSConfiguration {
         additionalTrustRoots: [NIOSSLAdditionalTrustRoots],
         sendCANameList: Bool = false,
         sslContextCallback: NIOSSLContextCallback? = nil,
+        clientCertificateRequestCallback: NIOSSLClientCertificateRequestCallback? = nil,
         pskClientProvider: NIOPSKClientIdentityProvider? = nil,
         pskServerProvider: NIOPSKServerIdentityProvider? = nil,
         pskHint: String? = nil
@@ -514,6 +521,7 @@ public struct TLSConfiguration {
         self.treatNoApplicationProtocolMatchAsError = treatNoApplicationProtocolMatchAsError
         self.keyLogCallback = keyLogCallback
         self.sslContextCallback = sslContextCallback
+        self.clientCertificateRequestCallback = clientCertificateRequestCallback
         self.pskClientProvider = pskClientProvider
         self.pskServerProvider = pskServerProvider
         self.pskHint = pskHint
@@ -554,6 +562,10 @@ private struct ClosureBits: Hashable {
         var callback: NIOSSLContextCallback?
     }
 
+    private struct ClientCertificateRequestCallbackBox {
+        var callback: NIOSSLClientCertificateRequestCallback?
+    }
+
     private var function: UInt
     private var context: UInt
 
@@ -563,6 +575,10 @@ private struct ClosureBits: Hashable {
 
     init(_ closure: NIOSSLContextCallback?) {
         self.init(SSLContextCallbackBox(callback: closure))
+    }
+
+    init(_ closure: NIOSSLClientCertificateRequestCallback?) {
+        self.init(ClientCertificateRequestCallbackBox(callback: closure))
     }
 
     // Never call this with the closure directly, only the boxes.
@@ -597,6 +613,9 @@ extension TLSConfiguration {
         }
         let isSSLContextCallbackEqual =
             ClosureBits(self.sslContextCallback) == ClosureBits(comparing.sslContextCallback)
+        let isClientCertificateRequestCallbackEqual =
+            ClosureBits(self.clientCertificateRequestCallback)
+            == ClosureBits(comparing.clientCertificateRequestCallback)
 
         return self.minimumTLSVersion == comparing.minimumTLSVersion
             && self.maximumTLSVersion == comparing.maximumTLSVersion && self.cipherSuites == comparing.cipherSuites
@@ -611,6 +630,7 @@ extension TLSConfiguration {
             && self.renegotiationSupport == comparing.renegotiationSupport
             && self.sendCANameList == comparing.sendCANameList && isSSLContextCallbackEqual && isPSKClientProviderEqual
             && isPSKServerProviderEqual && self.pskHint == comparing.pskHint
+            && isClientCertificateRequestCallbackEqual
     }
 
     /// Returns a best effort hash of this TLS configuration.
@@ -643,6 +663,7 @@ extension TLSConfiguration {
             hasher.combine(bytes: closureServerBits)
         }
         hasher.combine(ClosureBits(sslContextCallback))
+        hasher.combine(ClosureBits(clientCertificateRequestCallback))
         hasher.combine(pskHint)
     }
 
@@ -671,6 +692,7 @@ extension TLSConfiguration {
             additionalTrustRoots: [],
             sendCANameList: false,
             sslContextCallback: nil,
+            clientCertificateRequestCallback: nil,
             pskClientProvider: nil,
             pskServerProvider: nil,
             pskHint: nil

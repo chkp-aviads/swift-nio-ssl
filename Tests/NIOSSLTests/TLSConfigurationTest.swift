@@ -1685,7 +1685,7 @@ class TLSConfigurationTest: XCTestCase {
         // so that we're testing these best effort functions.
         XCTAssertEqual(
             MemoryLayout<TLSConfiguration>.size,
-            242,
+            258,
             "TLSConfiguration has changed size: you probably need to update this test!"
         )
 
@@ -1749,6 +1749,7 @@ class TLSConfigurationTest: XCTestCase {
             { $0.pskClientProvider = pskClientProvider },
             { $0.pskServerProvider = pskServerProvider },
             { $0.pskHint = "hint" },
+            { $0.clientCertificateRequestCallback = { _ in false } },
         ]
 
         for (index, transform) in transforms.enumerated() {

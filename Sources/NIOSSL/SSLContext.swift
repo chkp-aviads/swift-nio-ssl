@@ -267,8 +267,27 @@ private func sslContextCallback(ssl: OpaquePointer?, arg: UnsafeMutableRawPointe
 
     let parentSwiftContext = SSLConnection.loadConnectionFromSSL(ssl)
 
-    // This is a safe force unwrap as this callback is only register directly after setting the manager
-    var contextManager = parentSwiftContext.customContextManager!
+    // BoringSSL uses one cert_cb slot for both roles: on a server it fires to select our
+    // certificate, on a client it fires because the server requested one. `sslContextCallback`
+    // already uses both paths (see TLSConfigurationTest.testClientSideCertSelection), so the
+    // client-certificate-request callback is layered on top as a veto rather than replacing it.
+    if CNIOBoringSSL_SSL_is_server(ssl) == 0,
+        let clientCertificateRequestCallback =
+            parentSwiftContext.parentContext.configuration.clientCertificateRequestCallback
+    {
+        // `expectedHostname` is what this connection set as SNI. SSL_get_servername is documented
+        // for the server side only, so it is not a substitute here.
+        if !clientCertificateRequestCallback(parentSwiftContext.expectedHostname) {
+            return 0  // refused: fail the handshake before it completes
+        }
+        // Allowed: fall through so any sslContextCallback still gets to select a certificate.
+    }
+
+    // Nil when only `clientCertificateRequestCallback` was set, since that alone also installs
+    // this trampoline. Returning 1 leaves BoringSSL's default certificate handling in place.
+    guard var contextManager = parentSwiftContext.customContextManager else {
+        return 1
+    }
 
     // Begin loading a new context
     let result = contextManager.loadContext(ssl: ssl)
@@ -385,7 +404,10 @@ public final class NIOSSLContext {
 
         // Set the SSL Context Configuration callback.
         // The state is managed on the connection.
-        if configuration.sslContextCallback != nil {
+        //
+        // The same BoringSSL cert_cb slot serves both roles, so install the trampoline if either
+        // the server-side context callback or the client-side certificate-request callback is set.
+        if configuration.sslContextCallback != nil || configuration.clientCertificateRequestCallback != nil {
             CNIOBoringSSL_SSL_CTX_set_cert_cb(context, sslContextCallback, nil)
         }
 

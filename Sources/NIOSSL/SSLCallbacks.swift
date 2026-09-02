@@ -322,6 +322,24 @@ public typealias NIOSSLContextCallback =
         NIOSSLClientExtensionValues, EventLoopPromise<NIOSSLContextConfigurationOverride>
     ) -> Void
 
+/// A callback invoked on a **client** when the server requests a client certificate.
+///
+/// TLS lets a server ask the client to authenticate with a certificate. BoringSSL's default
+/// behaviour when no certificate is configured is to send an empty certificate list and let the
+/// handshake continue, leaving the server to decide what to do about it. For most clients that is
+/// the right thing. For a client that is deliberately impersonating the origin — a TLS-inspecting
+/// proxy, which by definition does not hold the real client's certificate — completing that
+/// handshake is actively harmful: the server may treat the connection as an authentication
+/// failure and take action against the account or device.
+///
+/// Set this callback to find out that a certificate was requested and to stop the handshake
+/// before it completes. Returning `false` fails the handshake; returning `true` keeps the default
+/// behaviour. The parameter is the server hostname sent as SNI, or `nil` if none was sent.
+///
+/// - Note: This has no effect on server-side contexts. See ``NIOSSLContextCallback`` for the
+///   server-side certificate selection hook, which shares the same BoringSSL callback slot.
+public typealias NIOSSLClientCertificateRequestCallback = @Sendable (String?) -> Bool
+
 /// A struct that provides helpers for working with a NIOSSLContextCallback.
 internal struct CustomContextManager: Sendable {
     private let callback: NIOSSLContextCallback
